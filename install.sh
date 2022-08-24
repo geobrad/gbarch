@@ -33,7 +33,7 @@ mkdir /mnt/boot
 mount /dev/disk/by-uuid/$ESP_UUID /mnt/root
 
 # Install base packages, kernel and firmware
-pacstrap /mnt base linux-lts linux-firmware vi dhcpcd intel-ucode nvidia-lts alsa-firmware sof-firmware
+pacstrap /mnt base linux-lts linux-firmware vi dhcpcd intel-ucode nvidia-lts alsa-firmware sof-firmware alsa-plugins
 
 # Set up fstab to mount the partitions (identified by UUID) on startup
 genfstab -U /mnt >> /mnt/etc/fstab
