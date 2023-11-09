@@ -1,10 +1,4 @@
 #!/bin/sh
-
-ESP_UUID=<UUID of EFI system partition>
-FS_UUID=<UUID of file system partition>
-SWAP_UUID=<UUID of swap partition>
-
-
 ######################################
 # Script to install and configure Arch Linux - WORK IN PROGRESS
 #
@@ -14,29 +8,43 @@ SWAP_UUID=<UUID of swap partition>
 ######################################
 
 # Prerequisites
-# - Linux (type 8300) partition on which Arch will be installed
+# - arch-install-scripts package installed
+# - Unused partition on which Arch will be installed
 # - EFI partition
 
-#######################################
-# Run from the Arch installation medium:
 
-# Format the linux file system (root) partition as ext4
-mkfs.ext4 /dev/disk/by-uuid/$FS_UUID
-# if installing to a flash device, add option: -O "^has_journal" to reduce disk reads/writes ??
-# and change to `bfq` I/O schedule (echo bfq > /sys/block/sdFS/queue/scheduler)
 
-mkswap /dev/disk/by-uuid/$SWAP_UUID
+# esp_partuuid=df592aad-c898-4a4a-8bd6-73d73008f304
+root_partuuid=05ace2b0-9b75-40c4-9c9b-82a4aa8b7a76
+mapping_name=newroot
+hostname=gbarch
 
-# Mount the root and EFI partitions
-mount /dev/disk/by-uuid/$FS_UUID /mnt
-mkdir /mnt/boot
-mount /dev/disk/by-uuid/$ESP_UUID /mnt/root
 
-# Install base packages, kernel and firmware
-pacstrap /mnt base linux-lts linux-firmware vi dhcpcd intel-ucode nvidia-lts alsa-firmware sof-firmware alsa-plugins
+# Set up the root partition based on:
+# https://wiki.archlinux.org/title/dm-crypt/Encrypting_an_entire_system#Simple_encrypted_root_with_TPM2_and_Secure_Boot
 
-# Set up fstab to mount the partitions (identified by UUID) on startup
-genfstab -U /mnt >> /mnt/etc/fstab
+root_partition_device=/dev/disks/by-partuuid/$root_partition_uuid
+
+
+echo Encrypting the root partition
+cryptsetup luksFormat "$root_partition_device"
+# -y : ask for the passphrase twice
+# -v : verbose
+
+echo Opening the encrypted partition
+cryptsetup open "$root_partition_device" "$mapping_name"
+
+echo Creating the root filesystem
+mkfs.ext4 "/dev/mapper/$mapping_name"
+
+echo Mounting the root filesystem
+mount /dev/mapper/$mapping_name /mnt
+# mkdir /mnt/boot
+# mount /dev/disks/by-partuuid/$esp_partuuid
+
+
+echo Installing base packages, kernel, firmware, text editor and DHCP
+pacstrap /mnt base linux linux-firmware vi dhcpcd
 
 # chroot into the new installation
 arch-chroot /mnt
@@ -45,21 +53,21 @@ arch-chroot /mnt
 ln -sf /usr/share/zoneinfo/Australia/Melbourne
 hwclock -systohc
 
+#Generate locales
 #******** Edit /etc/locale.gen and uncomment: ********
 # en_AU.UTF-8 UTF-8
-
-#Generate locales
+sed -i '/en_AU.UTF-8 UTF-8/s/^#//g' /etc/locale.gen
 locale-gen
 
 # Set the LANG variable
 echo "LANG=en_AU.UTF-8" > /etc/locale.conf
 
 # Set the hostname
-echo "gbarch" > /etc/hostname
+echo "$hostname" > /etc/hostname
 
-# Create and activate swap file
-swapon /dev/disks/by-uuid/$SWAP_UUID
-echo "UUID=$SWAP_UUID none swap defaults 0 0" >> /etc/fstab
+# # Create and activate swap file
+# swapon /dev/disks/by-uuid/$SWAP_UUID
+# echo "UUID=$SWAP_UUID none swap defaults 0 0" >> /etc/fstab
 
 systemctl enable dhcpcd
 
@@ -86,7 +94,7 @@ systemctl enable dhcpcd
 
 
 # Set root password
-echo "Setting the root password . . ."
+echo Setting root password
 passwd
 
 #********* Install or configure boot loader including microcode *********
