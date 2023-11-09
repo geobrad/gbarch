@@ -23,16 +23,16 @@ hostname=gbarch
 # Set up the root partition based on:
 # https://wiki.archlinux.org/title/dm-crypt/Encrypting_an_entire_system#Simple_encrypted_root_with_TPM2_and_Secure_Boot
 
-root_partition_device=/dev/disks/by-partuuid/$root_partition_uuid
+root_partition_=/dev/disks/by-partuuid/$root_partuuid
 
 
 echo Encrypting the root partition
-cryptsetup luksFormat "$root_partition_device"
+cryptsetup luksFormat "$root_partition"
 # -y : ask for the passphrase twice
 # -v : verbose
 
 echo Opening the encrypted partition
-cryptsetup open "$root_partition_device" "$mapping_name"
+cryptsetup open "$root_partition" "$mapping_name"
 
 echo Creating the root filesystem
 mkfs.ext4 "/dev/mapper/$mapping_name"
@@ -45,6 +45,8 @@ mount /dev/mapper/$mapping_name /mnt
 
 echo Installing base packages, kernel, firmware, text editor and DHCP
 pacstrap /mnt base linux linux-firmware vi dhcpcd
+
+exit
 
 # chroot into the new installation
 arch-chroot /mnt
