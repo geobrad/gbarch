@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Added by gbarch install script
+# Source: https://wiki.archlinux.org/title/Unified_kernel_image
+
+uki="$3"
+[[ -n "$uki" ]] || exit 0
+
+keypairs=(/MOK.key /MOK.crt)
+
+for (( i=0; i<${#keypairs[@]}; i+=2 )); do
+    key="${keypairs[$i]}" cert="${keypairs[(( i + 1 ))]}"
+    if ! sbverify --cert "$cert" "$uki" &>/dev/null; then
+        sbsign --key "$key" --cert "$cert" --output "$uki" "$uki"
+    fi
+done

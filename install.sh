@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 ######################################
 # Script to install and configure Arch Linux - WORK IN PROGRESS
 #
@@ -10,189 +10,115 @@
 # Prerequisites
 # - arch-install-scripts package installed
 # - Unused partition on which Arch will be installed
-# - EFI partition
+# - EFI system partition (ESP)
 
-
-
-# esp_partuuid=df592aad-c898-4a4a-8bd6-73d73008f304
+esp_uuid=52FC-FD2B
 root_partuuid=05ace2b0-9b75-40c4-9c9b-82a4aa8b7a76
-mapping_name=newroot
+mapping_name=arch2rootfs
 hostname=gbarch
+uki_filename=arch2.efi
+uki_fallback_filename=arch2-fallback.efi
 
+set -e  # Exit on any command failure
 
 # Set up the root partition based on:
 # https://wiki.archlinux.org/title/dm-crypt/Encrypting_an_entire_system#Simple_encrypted_root_with_TPM2_and_Secure_Boot
 
-root_partition_=/dev/disks/by-partuuid/$root_partuuid
+root_partition=/dev/disk/by-partuuid/$root_partuuid
+
+echo 'About to mount into the following partition:'
+echo
+blkid "$root_partition"
+echo
+read -p "Press enter to continue . . ."
 
 
-echo Encrypting the root partition
+echo 'Encrypting the root partition'
 cryptsetup luksFormat "$root_partition"
 # -y : ask for the passphrase twice
 # -v : verbose
+systemd-cryptenroll "$root_partition" --recovery-key
+read -p "SAVE THIS RECOVERY KEY!! Press enter to continue . . ."
+systemd-cryptenroll "$root_partition" --wipe-slot=empty
 
-echo Opening the encrypted partition
+echo 'Opening the encrypted partition'
 cryptsetup open "$root_partition" "$mapping_name"
 
-echo Creating the root filesystem
+echo 'Creating the root filesystem'
 mkfs.ext4 "/dev/mapper/$mapping_name"
 
-echo Mounting the root filesystem
-mount /dev/mapper/$mapping_name /mnt
-# mkdir /mnt/boot
-# mount /dev/disks/by-partuuid/$esp_partuuid
+echo 'Mounting the root filesystem'
+mount "/dev/mapper/$mapping_name" /mnt
+mount --mkdir "/dev/disk/by-uuid/$esp_uuid" /mnt/efi
 
 
-echo Installing base packages, kernel, firmware, text editor and DHCP
-pacstrap /mnt base linux linux-firmware vi dhcpcd
-
-exit
-
-# chroot into the new installation
-arch-chroot /mnt
-
-# Set time zone to Australia/Melbourne and generate /etc/adjtime
-ln -sf /usr/share/zoneinfo/Australia/Melbourne
-hwclock -systohc
-
-#Generate locales
-#******** Edit /etc/locale.gen and uncomment: ********
-# en_AU.UTF-8 UTF-8
-sed -i '/en_AU.UTF-8 UTF-8/s/^#//g' /etc/locale.gen
-locale-gen
-
-# Set the LANG variable
-echo "LANG=en_AU.UTF-8" > /etc/locale.conf
-
-# Set the hostname
-echo "$hostname" > /etc/hostname
-
-# # Create and activate swap file
-# swapon /dev/disks/by-uuid/$SWAP_UUID
-# echo "UUID=$SWAP_UUID none swap defaults 0 0" >> /etc/fstab
-
-systemctl enable dhcpcd
-
-# To enable hybernate/resume
-#*** Append "resume" to HOOKS= in /etc/mkinitcpio.conf
-#Add resume=UUID=<UUID of swap partition> to the kernel parameters (in the boot loader)
-
-# # IF the installation is on a removable medium:
-
-#   # Install a generic set of video drivers
-#   pacman -S xf86-video-vesa xf86-video-ati xf86-video-intel xf86-video-amdgpu xf86-video-nouveau xf86-video-fbdev
-
-#   # Install support for Broadcom wireless on MacBook Air 2017
-#   pacman-S broadcom-wl
-
-#   #********* Edit /etc/mkinitcpio.conf "HOOKS=": "block" and "keyboard" before "autodetect"
-
-#   # (Re)generate the initramfs image
-#   mkinitcpio -P
-
-#   #********* If installing to a flash device, configure systemd journal to store in RAM.
-
-# # ENDIF
+echo 'Installing base packages, kernel, firmware'
+pacstrap /mnt base linux linux-firmware networkmanager sudo sbsigntools tpm2-tss
 
 
-# Set root password
-echo Setting root password
-passwd
+echo 'Configuring mkinitcpio hooks'
+sed -i '/^HOOKS=/aHOOKS=(systemd autodetect modconf kms keyboard block sd-encrypt filesystems fsck)' /mnt/etc/mkinitcpio.conf
+sed -i '0,/^HOOKS=/s/./#&/' /mnt/etc/mkinitcpio.conf  # Comment out old HOOKS=() line
 
-#********* Install or configure boot loader including microcode *********
-# If installing onto a removable medium, use the fallback image for greater compatibility.
+echo 'Setting locale'
+sed -i '/en_AU.UTF-8 UTF-8/s/^#//g' /mnt/etc/locale.gen  # Uncomment: #en_AU.UTF-8 UTF-8
+echo "LANG=en_AU.UTF-8" > /mnt/etc/locale.conf
+touch /mnt/etc/vconsole.conf
 
+echo 'Setting the hostname'
+echo "$hostname" > /mnt/etc/hostname
+
+echo 'Allowing wheel group to sudo'
+sed -i '/^# %wheel ALL=(ALL:ALL) ALL/s/^# //g' /mnt/etc/sudoers
 
 #*** Uncomment "#ParallelDownloads = 5" and "#Color" in /etc/pacman.conf
+sed -i '/^#ParallelDownloads/s/^#//g' /mnt/etc/pacman.conf
+sed -i '/^#Color/s/^#//g' /mnt/etc/pacman.conf
+
+echo 'Setting up unified kernel image'
+# Reference: https://wiki.archlinux.org/title/Unified_kernel_image
+
+# Copy kernel command line configuration files
+cp -r ./cmdline.d /mnt/etc
+sed -i "/^rd.luks.name=/s/<UUID>/$(blkid -o value -s UUID $root_partition)/g" /mnt/etc/cmdline.d/rootfs.conf
+
+# Modify mkinitcpio presets
+sed -i '/_image=/s/^./#&/g' /mnt/etc/mkinitcpio.d/linux.preset
+sed -i '/_uki=/s/^#//g' /mnt/etc/mkinitcpio.d/linux.preset
+sed -i "/^default_uki=/s/\/arch-linux.efi/\/$uki_filename/g" /mnt/etc/mkinitcpio.d/linux.preset
+sed -i '/default_options=/s/^#//g' /mnt/etc/mkinitcpio.d/linux.preset
+sed -i "/^fallback_uki=/s/\/arch-linux-fallback.efi/\/$uki_fallback_filename/g" /mnt/etc/mkinitcpio.d/linux.preset
+
+cp ./uki-sign /mnt/etc/initcpio/post/
+cp ~/MOK.* /mnt
 
 
 
-# File system support
-pacman -S ntfs-3g
+echo 'Setting time zone'
+ln -sf /usr/share/zoneinfo/Australia/Melbourne /mnt/etc/localtime
+
+echo 'Setting time zone to Australia/Melbourne and generating /etc/adjtime'
+arch-chroot /mnt hwclock --systohc
+
+echo 'Generating locale(s)'
+arch-chroot /mnt locale-gen
+
+echo 'Generating the unified kernel image'
+arch-chroot /mnt mkinitcpio -P
+
+echo 'Locking the root password'
+arch-chroot /mnt passwd --lock root
+
+echo 'Adding the primary user'
+arch-chroot /mnt useradd -m -G wheel george
+arch-chroot /mnt passwd george
+
+echo "Done; now boot into $uki_filename"
+
+# # chroot into the new installation
+# cp ./local-install.sh /mnt/
+# arch-chroot /mnt /local-install.sh
 
 
-# Add `george` user and give sudo rights without password
-groupadd wheel # also used by KDE Plasma to determine who is an "Administrator"
-useradd -m -G wheel george
-passwd george
-pacman -S sudo
-echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
-
-
-#### REBOOT?
-
-
-# # For MacBook Air microphone jack (https://askubuntu.com/questions/984239/no-microphone-picked-up-on-ubuntu-16-04-on-macbook-pro)
-# echo "options snd-hda-intel model=mba6" > /etc/modprobe.d/alsa-base.conf
-
-
-
-#### Desktop - KDE Plasma
-pacman -S plasma-meta
-pacman -S pulseaudio-bluetooth  # Bluetooth audio support
-systemctl enable bluetooth
-systemctl enable NetworkManager
-
-#### Network service discovery and printing
-pacman -S nss-mdns cups print-manager
-#**** Modify /etc/nsswitch.conf as per ArchWiki Avahi instructions
-systemctl enable avahi-daemon  # network service discovery
-systemctl enable cups
-
-
-#### Apps
-pacman -S dolphin kwrite ark okular firefox konsole ktorrent code pyenv inkscape gimp vlc openssh gparted kio-gdrive
-
-pacman -S git
-git config --global user.email "george.bradley@gmail.com"
-git config --global user.name "George Bradley"
-
-pacman -S docker docker-compose
-usermod -aG docker george
-systemctl enable docker
-
-
-# Install base-devel group and yay
-pacman -S base-devel  # Needed in order to build yay
-curl -O https://aur.archlinux.org/cgit/aur.git/snapshot/yay.tar.gz
-tar -xf yay.tar.gz
-cd yay
-chmod a+w .  # Enable user running makepkg to write files
-runuser -u george -- makepkg -risc
-cd ..
-rm -r yay
-rm yay.tar.gz
-
-
-# Replace base-devel group with base-devel-meta package
-yay -S base-devel-meta
-pacman -Qqegt base-devel | pacman -Rs -  # Remove base-devel packages that are not required (by base-devel-meta)
-pacman -Qqeg base-devel | sudo pacman -D --asdeps -  # Mark remaining base-devel packages as dependencies
-
-#***** Install printer driver for Canon PIXMA TS9160 from AUR *****
-yay -S cnijfilter2 scangearmp2
-
-yay -S nvm
-#***** Add the following to /home/george/.bashrc (without the leading #'s)
-# # Set up Node Version Manager
-# source /usr/share/nvm/init-nvm.sh
-
-
-yay -S teams
-
-#yay -S fingerprint-gui howdy
-# TODO: configure fingerprint reader and facial recognition
-
-# # Install driver for Macbook Air webcam
-# pacman -S linux-headers  # required to build bcwc-pcie-git
-# #***** Install from AUR: facetimehd-firmware bcwc-pcie-git
-
-
-
-systemctl enable sddm
-
-# TODO: Install and configure smartmontools to monitor hard disk health
-
-# TODO: Set up graphics cards for best performance and/or energy efficiency
-
+# rm /mnt/local-install.sh
 
