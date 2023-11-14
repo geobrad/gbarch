@@ -22,7 +22,7 @@ pacman -S ntfs-3g
 
 
 #### Desktop - KDE Plasma
-pacman -S plasma-meta kde-system-meta kde-utilities-meta kde-network-meta
+pacman -S plasma-meta plasma-wayland-session kde-system-meta kde-utilities-meta kde-network-meta
 # pacman -S pulseaudio-bluetooth  # Bluetooth audio support
 # systemctl enable bluetooth
 # systemctl enable NetworkManager
